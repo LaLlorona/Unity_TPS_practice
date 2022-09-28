@@ -38,7 +38,7 @@ public class PlayerInput : MonoBehaviour
         fire = Input.GetButton(fireButtonName);
         reload = Input.GetButtonDown(reloadButtonName);
 
-        print("jump input on playerinput: " + jump);
+        //print("jump input on playerinput: " + jump);
 
     }
 }
