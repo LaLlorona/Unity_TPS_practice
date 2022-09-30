@@ -74,12 +74,6 @@ public class Enemy : LivingEntity
         }
 
 
-
-
-
-
-
-
     }
 
 #endif
@@ -121,12 +115,72 @@ public class Enemy : LivingEntity
 
     private void Update()
     {
+        if (dead)
+        {
+            return;
+        }
+        if (state == State.Tracking && Vector3.Distance(targetEntity.transform.position, transform.position) <= attackDistance)
+        {
+            //when the enemy is tracking, and distance between the target and the enemy is less or equal than the attack distance, begin attacking
+            BeginAttack();
+        }
 
+        animator.SetFloat("Speed", agent.desiredVelocity.magnitude);
     }
 
     private void FixedUpdate()
     {
         if (dead) return;
+
+        if (state == State.AttackBegin || state == State.Attacking)
+        {
+            //change direction of the enemy towards the target. 
+            var lookRotation = Quaternion.LookRotation(targetEntity.transform.position - transform.position);
+            var targetAngleY = lookRotation.eulerAngles.y;
+
+            targetAngleY = Mathf.SmoothDamp(transform.eulerAngles.y, targetAngleY, ref turnSmoothVelocity, turnSmoothTime);
+            transform.eulerAngles = Vector3.up * targetAngleY;
+        }
+
+        if (state == State.Attacking)
+        {
+            //when the enemy can actually attack. state will be changed to State.Attacking by EnableAttack(), and this method will be called in the animation 
+            Vector3 direction = transform.forward;
+            float deltaDistance = agent.velocity.magnitude * Time.deltaTime;
+
+            int size = Physics.SphereCastNonAlloc(attackRoot.position, attackRadius, direction, hits, deltaDistance, whatIsTarget);
+            //by SphereCastNonAlloc, update 'private RaycastHit[] hits = new RaycastHit[10]' array. It will save gameObjects that is in the path where the
+            //sphere moves 
+
+            for (int i = 0; i < size; i++)
+            {
+                var attackTargetEntity = hits[i].collider.GetComponent<LivingEntity>();
+
+                if (attackTargetEntity != null & !lastAttackedTargets.Contains(attackTargetEntity))
+                {
+                    var message = new DamageMessage();
+                    message.amount = damage;
+                    message.damager = gameObject;
+
+                    if (hits[i].distance <= 0f)
+                    {//when the gameObject was in the sphere in the begining of the scan.
+                        message.hitPoint = attackRoot.position;
+                    }
+
+                    else
+                    {
+                        message.hitPoint = hits[i].point;
+                    }
+                    message.hitNormal = hits[i].normal;
+
+                    attackTargetEntity.ApplyDamage(message);
+                    lastAttackedTargets.Add(attackTargetEntity);
+                    //to avoid multiple attack 
+                    break;
+
+                }
+            }
+        }
     }
 
     private IEnumerator UpdatePath()
@@ -135,15 +189,19 @@ public class Enemy : LivingEntity
         {
             if (hasTarget)
             {
+                //when targetEntity is not null, and not dead
                 if (state == State.Patrol)
                 {
+                    //change speed of the enemy to running speed
                     state = State.Tracking;
                     agent.speed = runSpeed;
                 }
+
+                //keep track the target 
                 agent.SetDestination(targetEntity.transform.position);
             }
             else
-            {
+            {//when the enemy is in the Patrol mode
 
                 if (targetEntity != null) targetEntity = null;
 
@@ -156,21 +214,26 @@ public class Enemy : LivingEntity
 
                 if (agent.remainingDistance <= 1f)
                 {
+                    //in the patrol mode, if the enemy almost reaches the destination, set a new target position on the map
                     var patrolTargetPosition =
                         Utility.GetRandomPointOnNavMesh(transform.position, 20f, NavMesh.AllAreas);
                     agent.SetDestination(patrolTargetPosition);
                 }
 
+
+
                 Collider[] colliders = Physics.OverlapSphere(eyeTransform.position, viewDistance, whatIsTarget);
+                //check every target object in the view Distance. 
 
                 foreach (var collider in colliders)
                 {
                     if (!IsTargetOnSight(collider.transform))
                     {
+                        //check whether there are blocking objects between the enemy and the target object
                         continue;
                     }
                     var livingEntity = collider.GetComponent<LivingEntity>();
-                    if (livingEntity != null && !livingEntity.dead)
+                    if (livingEntity != null && !livingEntity.dead) //when the target object has 'LivingEntity' and not dead, begin tracking.
                     {
                         targetEntity = livingEntity;
                         break;
@@ -187,6 +250,15 @@ public class Enemy : LivingEntity
     public override bool ApplyDamage(DamageMessage damageMessage)
     {
         if (!base.ApplyDamage(damageMessage)) return false;
+
+        if (targetEntity == null)
+        {
+            targetEntity = damageMessage.damager.GetComponent<LivingEntity>();
+        }
+
+        EffectManager.Instance.PlayHitEffect(damageMessage.hitPoint, damageMessage.hitNormal, transform, EffectManager.EffectType.Flesh);
+
+        audioPlayer.PlayOneShot(hitClip);
 
         return true;
     }
@@ -208,7 +280,15 @@ public class Enemy : LivingEntity
 
     public void DisableAttack()
     {
-        state = State.Tracking;
+        if (hasTarget)
+        {
+            state = State.Tracking;
+        }
+        else
+        {
+            state = State.Patrol;
+        }
+
 
         agent.isStopped = false;
     }
@@ -217,7 +297,7 @@ public class Enemy : LivingEntity
     {
 
 
-        Vector3 direction = target.position = eyeTransform.position;
+        Vector3 direction = target.position - eyeTransform.position;
         direction.y = eyeTransform.forward.y;
 
         if (Vector3.Angle(direction, eyeTransform.forward) > fieldOfView * 0.5f)
@@ -240,6 +320,13 @@ public class Enemy : LivingEntity
 
     public override void Die()
     {
+        base.Die();
+        GetComponent<Collider>().enabled = false;
 
+        agent.enabled = false;
+        animator.applyRootMotion = true;
+        animator.SetTrigger("Die");
+
+        audioPlayer.PlayOneShot(deathClip);
     }
 }
